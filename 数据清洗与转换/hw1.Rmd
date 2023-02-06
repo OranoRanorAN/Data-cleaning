@@ -1,6 +1,6 @@
 ---
 title: "数据挖掘第一次作业"
-author: '20307100120 严珏'
+author: 'oran'
 date: '2022-10-09'
 output: 
  html_document:
