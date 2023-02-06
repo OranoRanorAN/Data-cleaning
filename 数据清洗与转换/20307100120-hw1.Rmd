@@ -1,0 +1,385 @@
+---
+title: "数据挖掘第一次作业"
+author: '20307100120 严珏'
+date: '2022-10-09'
+output: 
+ html_document:
+    toc: yes
+---
+
+# 数据挖掘第一次作业 
+
+## 数据导入及数据预处理
+```{r library,include=FALSE}
+library(dplyr)
+```
+
+```{r setup}
+taxi=read.csv('Taxi Raw Data.csv',sep=',')
+dim(taxi)
+```
+
+```{r 数据预处理}
+#去掉v和NA
+taxi$RoofBaconStatus[taxi$RoofBaconStatus=='V']=NA
+taxi=na.omit(taxi)
+taxi$RoofBaconStatus=as.numeric(taxi$RoofBaconStatus)
+#去掉重复重复行
+taxi= taxi %>% distinct(TaxiID,GpsMeasureTime,.keep_all=T)
+#去掉日期为4.8号的一行数据
+taxi=taxi[-44070,]
+dim(taxi)
+#开一个数据框储存按司机分类的数据
+driver=as.data.frame(table(taxi$TaxiID))
+names(driver)[1]='TaxiID'
+```
+
+## 将数据按订单整理
+
+```{r order}
+driver$order=0
+taxi$order=0
+j=1
+for(i in 1:(nrow(taxi)-1)){
+    if(taxi$PassengerState[i]==0 & taxi$RoofBaconStatus[i]==0){
+      taxi$order[i]=j
+      driver$order[driver$TaxiID==taxi[i,]$TaxiID]=j
+      if(taxi$PassengerState[i+1]!=0 | taxi$RoofBaconStatus[i+1]!=0){j=j+1}
+    }
+    if(taxi[i,]$TaxiID != taxi[i+1,]$TaxiID){j=1}
+}
+#选出有效的属于订单的行
+taxiorder=taxi[taxi$order != 0,]
+taxiorder=taxiorder[,-c(2,3,4)]
+taxiorder[30:50,]
+dim(taxiorder)
+```
+**变量名阐释：**  \n 
+  \n taxiid：司机ID  
+  \n order：订单编号  
+  \n start.time：订单开始时间  	
+  \n start.long：订单开始经度  	
+  \n start.lan：订单开始纬度  
+  \n end.time：订单结束时间 	
+  \n end.long：订单结束经度 	
+  \n end.lan：订单结束纬度 	
+  \n night.time：订单夜间行驶时间 	
+  \n day.time：订单白天行驶时间 	
+  \n dis.night：夜间行驶距离 	
+  \n dis.day：白天行驶距离 	
+  \n price：应付给司机的价格 
+  \n ttldistance：订单总距离   
+  \n ttltime：订单总时长 
+  \n waiting.fee：等待所需加价 
+
+
+```{r rearrange}
+#建一个存按order数据的数据集
+#手动输入第一行
+taxiid=taxiorder$TaxiID[1]
+order=taxiorder$order[1]
+start.time=taxiorder$GpsMeasureTime[1]
+start.long=taxiorder$Longitude[1]
+start.lan=taxiorder$Lantitude[1]
+end.time=taxiorder$GpsMeasureTime[49]
+end.long=taxiorder$Longitude[49]
+end.lan=taxiorder$Lantitude[49]
+ttldistance=sum(taxiorder$Speed[1:49]/60)
+order=data.frame(taxiid,order,start.time,start.long,start.lan,end.time,
+                 end.long,end.lan,ttldistance,stringsAsFactors=FALSE)
+#(nrow(taxiorder)-1)
+j=1
+dis=0
+dis.night=0
+waiting.fee=0
+waiting.time=0
+taxiorder$flag='ing'
+taxiorder$flag[1]='start'
+taxiorder$flag[nrow(taxiorder)]='end'
+order$waiting.fee=0
+for(i in 1:(nrow(taxiorder)-1)){
+   dis=dis+taxiorder$Speed[i]/60
+  if(taxiorder$Speed[i]<12){
+    waiting.time=waiting.time+1
+    waiting.fee=waiting.fee+0.52}else{waiting.time=0}
+  if(as.POSIXct(taxiorder$GpsMeasureTime[i]) < as.POSIXct('2015/4/1 5:00') |
+     as.POSIXct(taxiorder$GpsMeasureTime[i]) > as.POSIXct('2015/4/1 23:00')){
+    dis.night=dis.night+taxiorder$Speed[i]/60
+    if(taxiorder$Speed[i]<12){waiting.fee=waiting.fee+0.1}
+  }
+  if(waiting.time==5){
+    order$waiting.fee[j]=waiting.fee+order$waiting.fee[j]
+    waiting.fee=waiting.time=0
+    }
+  if(taxiorder$order[i] != taxiorder$order[i+1] | 
+     taxiorder$TaxiID[i] != taxiorder$TaxiID[i+1]){
+    taxiorder$flag[i]='end'
+    #记录结束时间、经纬度、总距离和夜间距离,waiting.fee
+    order[j,6:8]=taxiorder[i,2:4]
+    order$ttldistance[j]=dis
+    order$dis.night[j]=dis.night
+    #order$waiting.fee[j]=waiting.fee
+    #清空距离 and waiting.fee
+    dis=0
+    dis.night=0
+    waiting.fee=0
+    waiting.time=0
+    taxiorder$flag[i+1]='start' 
+    #记录下一个order的开始时间、经纬度
+    order[j+1,1:5]=taxiorder[i+1,c(1,6,2:4)]
+    j=j+1
+    order$waiting.fee[j]=0
+  }
+}
+#手动输入最后一行
+order[nrow(order),6:8]=taxiorder[taxiorder$TaxiID==30009 & taxiorder$flag=='end' &  taxiorder$order==11,2:4]
+order$ttldistance[nrow(order)]=sum(taxiorder$Speed[taxiorder$TaxiID==30009 &   taxiorder$order==11])/60
+order$dis.night[nrow(order)]=0
+order$waiting.fee[nrow(order)]=0
+#计算总时间
+for(i in 1:nrow(order)){
+ a=as.POSIXct(order$end.time[i])-as.POSIXct(order$start.time[i])
+ units(a)='mins'
+ order$ttltime[i]=as.numeric(a)
+}
+#计算夜晚时间
+for(i in 1:nrow(order)){
+  if(order$dis.night[i]== order$ttldistance[i]){order$night.time[i]=order$ttltime[i]}
+  else{
+    if(as.POSIXct(order$start.time[i]) < as.POSIXct('2015/4/1 5:00')){
+      a=as.POSIXct('2015/4/1 5:00')-as.POSIXct(order$start.time[i])
+      units(a)='mins'
+      order$night.time[i]=as.numeric(a)
+    }
+    if(as.POSIXct(order$end.time[i]) > as.POSIXct('2015/4/1 23:00')){
+      a=as.POSIXct(order$end.time[i])-as.POSIXct('2015/4/1 23:00')
+      units(a)='mins'
+      order$night.time[i]=as.numeric(a)
+    }
+  }
+  if(order$dis.night[i]==0){order$night.time[i]=0}
+}
+order$day.time=order$ttltime-order$night.time
+order[1:10,]
+```
+
+### 计算价格
+
+```{r price}
+order$dis.day=order$ttldistance-order$dis.night
+price = function(o1) {
+  #全是白天的情况
+  if(o1$dis.night==0){
+    if(o1$ttldistance<=3){price=14}
+    if(o1$ttldistance<10 & o1$ttldistance>3){price=14+2.4*(o1$ttldistance-3)}
+    if(o1$ttldistance>=10){price=14+2.4*7+3.6*(o1$ttldistance-10)}
+  }
+  #全是夜晚的情况
+  if(o1$dis.day==0){
+    if(o1$ttldistance<=3){price=18}
+    if(o1$ttldistance<10 & o1$ttldistance>3){price=18+3.1*(o1$ttldistance-3)}
+    if(o1$ttldistance>=10){price=18+3.1*7+4.7*(o1$ttldistance-10)}
+  }
+  #跨11pm
+  if(as.POSIXct(o1$start.time) <= as.POSIXct('2015/4/1 23:00') &
+     as.POSIXct(o1$end.time) > as.POSIXct('2015/4/1 23:00')){
+    if(o1$ttldistance<=3){price=14}
+    if(o1$ttldistance>3){
+      if(o1$dis.day<=3){
+        if(o1$ttldistance<10){price=14+3.1*(o1$ttldistance-3)}
+        if(o1$ttldistance>=10){price=14+3.1*7+4.7*(o1$ttldistance-10)}
+      }
+      if(o1$dis.day>3 & o1$dis.day<10){
+        if(o1$ttldistance<10){price=14+2.4*(o1$dis.day-3)+3.1*o1$dis.night}
+        if(o1$ttldistance>=10){price=14+2.4*(o1$dis.day-3)
+          +3.1*(o1$dis.night+10-o1$ttldistance)+4.7*(o1$ttldistance-10)}
+      }
+      if(o1$dis.day>=10){price=14+2.4*7+3.6*(o1$dis.day-10)+4.7*o1$dis.night}
+    }
+  }
+  #跨5am
+  if(as.POSIXct(o1$start.time) < as.POSIXct('2015/4/1 5:00') &
+     as.POSIXct(o1$end.time) >= as.POSIXct('2015/4/1 5:00')){
+    if(o1$ttldistance<=3){price=18}
+    if(o1$ttldistance>3){
+      if(o1$dis.night<3){
+        if(o1$ttldistance<10){price=18+2.4*(o1$ttldistance-3)}
+        if(o1$ttldistance>=10){price=18+2.4*7+3.6*(o1$ttldistance-10)}
+      }
+      if(o1$dis.night>3 & o1$dis.night<10){
+        if(o1$ttldistance<10){price=18+3.1*(o1$dis.night-3)+2.4*o1$dis.day}
+        if(o1$ttldistance>=10){price=18+3.1*(o1$dis.night-3)
+        +2.4*(o1$dis.day+10-o1$ttldistance)+3.6*(o1$ttldistance-10)}
+      }
+      if(o1$dis.night>=10){price=18+3.1*7+4.7*(o1$dis.night-10)+4.7*o1$dis.day}
+    }
+  }
+  return(price)
+}
+for(i in 1:nrow(order)){
+  order$price[i]=price(order[i,])+order$waiting.fee[i]
+}
+taxi.byorder=cbind(order[,1:8],order[,c(13,14,11,15,16)])
+taxi.byorder[1:10,]
+write.csv(taxi.byorder,file='taxi.byorder.csv')
+write.csv(order,file='order')
+dim(order)
+```
+## 计算清洗前各指标
+
+**变量名阐释：** \n  
+  \n driver.num：司机总数 	 
+  \n order：订单总数 	
+  \n order.ave：司机平均每天的订单数 
+  \n mile.ave：司机平均每天的行驶里程 	
+  \n income.ave：司机平均每天的收入金额 	
+  \n passenger.time：司机平均每天的载客营运时长  	
+  \n work.time：司机平均每天的工作时长 	
+  \n vancant.time：司机平均每天的空驶时间比例 
+
+
+```{r index.before}
+#司机总数
+driver.num=c(249)
+index=data.frame(driver.num)
+#订单总数
+index$order[1]=nrow(order)
+#司机平均每天的订单数
+index$order.ave=mean(driver$order)
+#司机平均每天的行驶里程
+for(i in 1:249){
+  driver$mile[i]=sum(taxi$Speed[taxi$TaxiID==driver[i,]$TaxiID]/60)
+}
+index$mile.ave[1]=mean(driver$mile)
+#司机平均每天的收入金额
+for(i in 1:249){
+  driver$income[i]=sum(order$price[order$taxiid==driver[i,]$TaxiID])
+}
+index$income.ave[1]=mean(driver$income)
+#司机平均每天的载客营运时长 
+for(i in 1:249){
+  driver$passenger.time[i]=sum(order$ttltime[order$taxiid==driver[i,]$TaxiID])
+}
+index$passenger.time[1]=mean(driver$passenger.time)
+#司机平均每天的工作时长 0,1,2
+for(i in 1:249){
+  a=as.data.frame(table(taxi$RoofBaconStatus[taxi$TaxiID==driver[i,]$TaxiID]))
+  driver$work.time[i]=sum(a$Freq[a$Var1==0 | a$Var1==1 | a$Var1==2])
+}
+index$work.time[1]=mean(driver$work.time)
+#司机平均每天的空驶时间比例
+index$vancant.time=1-index$passenger.time/index$work.time
+index
+```
+
+## 清洗噪音/孤立点数据
+
+### 删除订单级别的噪音/孤立点数据
+
+```{r clean}
+#删除订单级别的噪音/孤立点数据
+#删除 距离≤0.5km, 时间>360min,和时间<5 的数据
+order.clean=order[order$ttldistance > 0.5,]
+order.clean=order[order$ttltime >=5 & order$ttltime <= 360,]
+#删除 距离/时间(km/min) <0.1, 距离/时间(km/min) >2
+order.clean=order.clean[order.clean$ttldistance/order.clean$ttltime >= 0.1 &
+                        order.clean$ttldistance/order.clean$ttltime <= 2, ]
+#5846
+write.csv(order.clean,file='taxi.byorder.cleaned.csv')
+dim(order.clean)
+order.clean(1:10,)
+```
+
+### 删除司机级别的噪音/孤立点数据
+
+```{r}
+#将订单按司机整理
+driver.clean=as.data.frame(table(order.clean$taxiid))
+names(driver.clean)[1]='taxiid'
+names(driver.clean)[2]='order'
+#司机平均每天的收入金额
+for(i in 1:nrow(driver.clean)){
+  driver.clean$income[i]=sum(order.clean$price[order.clean$taxiid
+                                               ==driver.clean[i,]$taxiid])
+}
+#司机平均每天的载客营运时长 
+for(i in 1:nrow(driver.clean)){
+  driver.clean$passenger.time[i]=sum(order.clean$ttltime[order.clean$taxiid
+                                                ==driver.clean[i,]$taxiid])
+}
+#司机平均每个订单的时间
+for(i in 1:nrow(driver.clean)){
+  driver.clean$time.ave[i]=mean(order.clean$ttltime[order.clean$taxiid
+                                               ==driver.clean[i,]$taxiid])
+}
+#司机平均每个订单的路程
+for(i in 1:nrow(driver.clean)){
+  driver.clean$dis.ave[i]=mean(order.clean$ttldistance[order.clean$taxiid
+                                               ==driver.clean[i,]$taxiid])
+}
+#司机平均每个订单的速度
+for(i in 1:nrow(driver.clean)){
+  driver.clean$speed.ave[i]=mean(order.clean$ttldistance[order.clean$taxiid
+                                ==driver.clean[i,]$taxiid]/
+                                  order.clean$ttltime[order.clean$taxiid
+                                               ==driver.clean[i,]$taxiid])*60
+}
+dim(driver.clean)
+```
+
+```{r}
+#删除司机级别的噪音/孤立点数据
+driver.clean=driver.clean[driver.clean$income < 1500 &
+                            driver.clean$income > 200,]
+driver.clean=driver.clean[driver.clean$order < 50 &
+                            driver.clean$order > 5,]
+driver.clean=driver.clean[driver.clean$passenger.time < 720 &
+                            driver.clean$passenger.time > 60,]
+driver.clean=driver.clean[driver.clean$time.ave < 40 &
+                            driver.clean$time.ave > 5,]
+driver.clean=driver.clean[driver.clean$dis.ave < 20 &
+                            driver.clean$dis.ave > 2,]
+driver.clean=driver.clean[driver.clean$speed.ave < 120 &
+                            driver.clean$speed.ave > 20,]
+#206
+write.csv(driver.clean,file='taxi.bydriver.cleaned.csv')
+dim(driver.clean)
+driver.clean[1:10,]
+```
+
+## 计算清洗后各指标
+
+```{r index}
+taxi.exorder=anti_join(taxi,taxiorder,by=c('TaxiID','GpsMeasureTime'))
+#司机总数
+index[2,]$driver.num=nrow(driver.clean)
+#订单总数
+index[2,]$order=sum(driver.clean$order)
+#司机平均每天的订单数
+index[2,]$order.ave=mean(driver.clean$order)
+#司机平均每天的行驶里程
+for(i in 1:nrow(driver.clean)){
+  driver.clean$mile[i]=driver.clean$dis.ave[i]*driver.clean$order[i]
+  +sum(taxi.exorder$Speed[taxi.exorder$TaxiID==driver.clean[i,]$taxiid]/60)
+}
+index[2,]$mile.ave=mean(driver.clean$mile)
+#司机平均每天的收入金额
+index[2,]$income.ave=mean(driver.clean$income)
+#司机平均每天的载客营运时长
+index[2,]$passenger.time=mean(driver.clean$passenger.time)
+#司机平均每天的工作时长（载客+空驶，不考虑停运时间）
+for(i in 1:nrow(driver.clean)){
+  a=as.data.frame(table(taxi.exorder$RoofBaconStatus[taxi.exorder$TaxiID
+                        ==driver.clean[i,]$taxiid]))
+  driver.clean$work.time[i]=sum(a$Freq[a$Var1==0 | a$Var1==1 | a$Var1==2])+driver.clean$passenger.time[i]
+}
+index[2,]$work.time=mean(driver.clean$work.time)
+#司机平均每天的空驶时间比例（空驶/[载客+空驶]）
+index[2,]$vancant.time=1-index[2,]$passenger.time/index[2,]$work.time
+row.names(index)[1]='before'
+row.names(index)[2]='after'
+write.csv(index,file='index.csv')
+index
+```
+
+
